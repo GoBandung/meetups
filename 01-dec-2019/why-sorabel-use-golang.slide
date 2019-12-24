@@ -1,0 +1,221 @@
+Why We Use Golang at Sorabel
+
+Ahmad Zaky
+Senior Backend Engineer, Sorabel
+ahmad.zaky@sorabel.com
+
+20 Dec 2019
+
+* Little intro about me
+
+- Not to be confused with Bukalapak's founder
+- Graduated from Informatics ITB on October 2016
+- Joined Sorabel (then Sale Stock) as a backend engineer 3 weeks before that
+- Mainly code in Golang and Nodejs
+- Currently also manage [[https://www.facebook.com/groups/DevCBandung][Facebook Developer Circles Bandung]]
+
+
+* Little intro about Sorabel
+
+E-commerce founded in late 2014, concentrated on women's fashion
+
+- One of the top fashion e-commerce in Indonesia
+- In early 2019, rebranded from *Sale* *Stock* to *Sorabel*
+
+Internal engineering founded in early 2015
+
+- Launched in-house website in mid 2015, app in late 2015
+- We handle the business from end (creating design samples) to end (logistics), and we utilize tech at every point
+
+.image sorabel.jpeg _ 200
+
+
+* Background
+
+* Sorabel's tech stack
+
+When first launched:
+
+- Single monolith API written in Scala, web and app in React/React Native
+
+In 2016:
+
+- Started splitting the responsibilities into microservices
+- Microservices were written in Scala, Nodejs, or Python
+
+: At that time, people were developing microservices using languages they were most comfortable with
+
+
+* Problems we faced in 2016
+
+- Scala build time was high (> 30 mins for monolith API, > 10 mins for other services)
+- Scala startup time was also high. Can be frustrating when developing
+- Scala is using a lot of memory. Also troublesome when developing locally
+- Scala's learning curve was high (probably due to its functional nature)
+- We stored all versions of all services (so we can easily deploy any version at any time), and we wanted to reduce the image size
+- We had several problems with interpreted languages
+- Python and Nodejs's performance was not so great
+
+
+: There were services using Python that demand high-throughput, that failed to do their job
+
+
+* The Decision to Move Towards Golang
+
+* Why Golang
+
+- By design, was built by Google for performant services with huge scale
+- Statically compiled and garbage collected
+- Syntax similar to C++/Java, hence the low learning curve
+- Powerful standard library (`http`, `encoding/*`, `sync`, `exec`)
+    func main() {
+        http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+          r.Write("Hello world!")
+        })
+        log.Fatal(http.ListenAndServe(":8080", nil))
+    }
+
+
+* Moving to Golang
+
+- So we started using Golang since late 2016
+- None of our engineers had used Golang before, so we experimented a bit with project structure, build pipeline, etc.
+- Since early 2017 we had established a good foundation to developing services in Golang, and (almost) all services built after that used Golang
+
+
+* How Golang solved our problems
+
+- Compiles in a matter of seconds, even for large service with hundreds `.go` files
+
+.image build-annotated.png _ 1200
+
+* How Golang solved our problems (part 2)
+
+- Starts instantly
+- Very little memory overhead
+- Very low learning curve
+- Small binary size
+- Compiled and statically typed, eliminating our problems with interpreted languages
+- Very performant
+
+
+* ... and it even came with perks
+
+- Concurrencies are first-class in Golang. Goroutines and channels make it very easy to introduce concurrency in our programs, while at the same time letting us to have full control over it
+- Due to its simplicity, therefore increased readability and less error-prone
+- Built in testing and profiling tools
+- Good documentation, not only the std libs but also third party libs (thanks to Godoc)
+- Highly opinionated. Effective ways to do stuff in Golang is well-documented in [[https://golang.org/doc/effective_go.html][effective Go]]
+
+
+* Did it come at cost?
+
+At that time, there was no official package manager for dependencies
+
+- we used [[https://github.com/Masterminds/glide][Glide]] (and still do)
+- version managements at times can be tricky
+- now Golang has [[https://blog.golang.org/using-go-modules][go.mod]]
+
+Cannot have circular dependency
+
+- at last, it made us rethink our project structure and came with better design
+
+* Did it come at some cost? (part 2)
+
+Error handling may be cumbersome
+
+    if err != nil {
+      log.Printf("Error: %v", err)
+      return err
+    }
+
+- error checks all over the place, can be frustrating when coming from `try-catch` world
+- on the bright side, it makes us really think of handling different errors differently
+- however, [[https://go.googlesource.com/proposal/+/master/design/go2draft-error-handling-overview.md][Go 2 draft proposal on error handling seems promising]]
+
+
+* Use Cases in Sorabel
+
+* Use case 1: workers
+
+Problems: we want to process stream of events, but can only process certain events at a time.
+
+Happened in our notification service.
+
+* Use case 1: workers
+
+    func StartWorkers(jobChannel chan Job, max int) {
+      for i := 0; i < max; i++ {
+          go startWorker(jobChannel)
+      }
+    }
+
+    func startWorker(jobChannel chan Job) {
+      for job := range jobChannel {
+        process(job)
+      }
+    }
+
+
+* Use case 2: cache stampede problem
+
+Problems: A cache stampede is when a system with caching mechanism has high load, it may attempt to calculate what is supposed to be cached, multiple times, therefore reduces cache hit.
+
+     func Fetch(key string, ttl time.Duration) interface{} {
+       value, ok := cache.Read(key)
+       if !ok {
+        value := compute(key)
+        cache.Write(key, value, ttl)
+       }
+       return value
+     }
+
+When `compute` takes a long time to complete, it may be called simultaneously for the same key.
+
+Happened in our product recommender service
+
+* Use case 2: cache stampede problem
+
+    func Fetch(key string, ttl time.Duration) interface{} {
+      // stampedeLock is a sync.Map
+      if _, loaded := stampedeLock.LoadOrStore(key, true); loaded {
+        // at this point, some goroutine already processed the same key.
+        // we wait until the lock is released
+        for {
+          if _, loaded := stampedeLock.Load(key); !loaded {
+            value, _ := cache.Read(key)
+            return value
+          }
+          time.Sleep(10 * time.Millisecond)
+        }
+      }
+      defer stampedeLock.Delete(key)
+
+      value, ok := cache.Read(key)
+      if !ok {
+        value := compute(key)
+        cache.Write(key, value, ttl)
+      }
+      return value
+    }
+
+
+* Golang in Sorabel Now
+
+* Current condition in Sorabel
+
+- We have over 200 microservices, over 150 are written in Golang
+- There are several microservices that is separated from our gigantic monolith API
+- New backend services are always written in Golang, and using Grpc whenever possible
+- Almost everything is written from scratch. We developed many internal libraries, and we only use few third party libraries / frameworks such as [[https://github.com/gorilla/mux][Gorilla/mux]]
+- Although not often, we rewrite some of our old services from Python/Nodejs and gained great performance gain
+
+
+* Final notes
+
+- Golang is a powerful language, but also easy to learn
+- Golang has solved many of our problems in Sorabel. It allows us to create high performant service and also increase iteration speed
+- Golang community is growing at a fast pace. As the time goes on, there will be many open source libraries and tools written in Golang
+- Golang 2 seems promising due to its generic and error handling [[https://go.googlesource.com/proposal/+/master/design/go2draft.md][proposals]]
+
+: ini notes buat presenter
